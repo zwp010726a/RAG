@@ -1,0 +1,22 @@
+__pycache__/
+*.pyc
+venv/
+*.pth
+*.pt
+data/
+models/
+# 模型权重
+*.bin
+*.safetensors
+*.pt
+*.pth
+baichuan-7b/
+bge-large-zh/
+gte-large/
+e5-*/
+out_lora_*/
+# Python/IDE
+__pycache__/
+*.pyc
+.venv/
+.vscode/
