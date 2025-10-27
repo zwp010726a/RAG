@@ -1,0 +1,100 @@
+nano /root/Agent/train_lora_qlo_ra_accelerate.py  # 粘贴保存
+chmod +x /root/Agent/train_lora_qlo_ra_accelerate.py
+nano /root/Agent/train_lora_qlo_ra_accelerate.py  # 粘贴保存
+chmod +x /root/Agent/train_lora_qlo_ra_accelerate.py
+nano /root/Agent/train_lora_qlo_ra_accelerate.py  # 粘贴保存
+chmod +x /root/Agent/train_lora_qlo_ra_accelerate.py
+#!/usr/bin/env python
+# -*- coding: utf-8 -*-
+
+import argparse
+import logging
+from datasets import load_dataset
+from transformers import AutoModelForCausalLM, AutoTokenizer, Trainer, TrainingArguments, BitsAndBytesConfig
+from peft import LoraConfig, get_peft_model
+
+logging.basicConfig(level=logging.INFO)
+
+def parse_args():
+    parser = argparse.ArgumentParser(description="QLoRA + LoRA 小样本训练 accelerate 脚本")
+    parser.add_argument("--model_name", type=str, required=True, help="Baichuan 模型路径")
+    parser.add_argument("--train_file", type=str, required=True, help="训练数据 jsonl 文件路径")
+    parser.add_argument("--output_dir", type=str, default="./out_lora_fp16", help="输出目录")
+    parser.add_argument("--num_train_epochs", type=int, default=1, help="训练轮数")
+    parser.add_argument("--per_device_train_batch_size", type=int, default=1, help="单卡 batch size")
+    parser.add_argument("--gradient_accumulation_steps", type=int, default=1, help="梯度累积")
+    parser.add_argument("--learning_rate", type=float, default=1e-4, help="学习率")
+    parser.add_argument("--lora_r", type=int, default=8, help="LoRA r")
+    parser.add_argument("--lora_alpha", type=int, default=16, help="LoRA alpha")
+    parser.add_argument("--lora_dropout", type=float, default=0.05, help="LoRA dropout")
+    parser.add_argument("--target_modules", type=str, default="q_proj,v_proj", help="LoRA target modules, 用逗号分隔")
+    return parser.parse_args()
+
+def main():
+    args = parse_args()
+    logging.info("=== Start loading tokenizer ===")
+    
+    tokenizer = AutoTokenizer.from_pretrained(args.model_name, trust_remote_code=True)
+    if tokenizer.pad_token is None:
+        tokenizer.pad_token = tokenizer.eos_token
+
+    logging.info("=== Start loading model (4-bit QLoRA) ===")
+    bnb_config = BitsAndBytesConfig(
+        load_in_4bit=True,
+        bnb_4bit_compute_dtype="float16",
+        bnb_4bit_use_double_quant=True,
+        bnb_4bit_quant_type="nf4"
+    )
+
+    model = AutoModelForCausalLM.from_pretrained(
+        args.model_name,
+        quantization_config=bnb_config,
+        device_map="auto",
+        trust_remote_code=True
+    )
+    logging.info("=== Model loaded on GPU ===")
+
+    logging.info("=== Apply LoRA ===")
+    target_modules = args.target_modules.split(",")
+    lora_config = LoraConfig(
+        r=args.lora_r,
+        lora_alpha=args.lora_alpha,
+        target_modules=target_modules,
+        lora_dropout=args.lora_dropout,
+        bias="none",
+        task_type="CAUSAL_LM"
+    )
+    model = get_peft_model(model, lora_config)
+
+    logging.info("=== Load dataset ===")
+    dataset = load_dataset("json", data_files={"train": args.train_file})["train"]
+
+    logging.info("=== Start training ===")
+    training_args = TrainingArguments(
+        output_dir=args.output_dir,
+        per_device_train_batch_size=args.per_device_train_batch_size,
+        gradient_accumulation_steps=args.gradient_accumulation_steps,
+        num_train_epochs=args.num_train_epochs,
+        learning_rate=args.learning_rate,
+        fp16=True,
+        logging_steps=1,
+        save_strategy="epoch",
+        save_total_limit=2,
+        report_to="none",
+        ddp_find_unused_parameters=False
+    )
+
+    trainer = Trainer(
+        model=model,
+        train_dataset=dataset,
+        tokenizer=tokenizer,
+        args=training_args
+    )
+
+    trainer.train()
+    logging.info("=== Training finished ===")
+    trainer.save_model(args.output_dir)
+    logging.info(f"=== LoRA adapter saved to {args.output_dir} ===")
+
+if __name__ == "__main__":
+    main()
